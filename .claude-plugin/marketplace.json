@@ -5,13 +5,13 @@
     "url": "https://github.com/gunba/office-tools"
   },
   "metadata": {
-    "description": "Office productivity skills (xlsx/docx/pptx) and the ATO legal corpus MCP server, packaged for Claude Code and Codex."
+    "description": "Rust Office document primitives for xlsx/docx/pptx, read-only Outlook, and MCP agent workflows."
   },
   "plugins": [
     {
       "name": "office-tools",
       "source": "./plugins/office-tools",
-      "description": "Office productivity skills (xlsx/docx/pptx) and the ATO legal corpus MCP server."
+      "description": "Rust Office document primitives and MCP server."
     }
   ]
 }

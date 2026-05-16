@@ -2,7 +2,7 @@
   "name": "office-tools",
   "interface": {
     "displayName": "Office Tools",
-    "shortDescription": "xlsx/docx/pptx skills and the ATO legal corpus MCP server."
+    "shortDescription": "Rust xlsx/docx/pptx, Outlook, and OOXML MCP tools."
   },
   "plugins": [
     {

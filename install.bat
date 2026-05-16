@@ -13,6 +13,30 @@ echo office-tools installer
 echo Marketplace path: %REPO_DIR%
 echo.
 
+where cargo >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Rust Cargo was not found on PATH.
+    echo Install Rust from https://rustup.rs/ or place a prebuilt office-tools.exe at:
+    echo   %REPO_DIR%\plugins\office-tools\bin\office-tools.exe
+    exit /b 1
+)
+
+echo Building Rust office-tools binary...
+cargo build --release --manifest-path "%REPO_DIR%\Cargo.toml"
+if %errorlevel% neq 0 (
+    echo Rust build failed.
+    exit /b 1
+)
+
+if not exist "%REPO_DIR%\plugins\office-tools\bin" mkdir "%REPO_DIR%\plugins\office-tools\bin"
+copy /Y "%REPO_DIR%\target\release\office-tools.exe" "%REPO_DIR%\plugins\office-tools\bin\office-tools.exe" >nul
+if %errorlevel% neq 0 (
+    echo Could not copy office-tools.exe into the plugin bin directory.
+    exit /b 1
+)
+echo   Built: plugins\office-tools\bin\office-tools.exe
+echo.
+
 set "INSTALLED_ANY=0"
 
 REM ---- Claude Code ---------------------------------------------------------
@@ -70,12 +94,9 @@ if "%INSTALLED_ANY%"=="0" (
 echo ============================================================
 echo Install complete.
 echo.
-echo On first use of the `ato` MCP tools, the ato-mcp binary (~tens of MB)
-echo and the ATO legal corpus (~4 GB) will download into the plugin's
-echo persistent data directory. Windows Defender / CrowdStrike / SentinelOne
-echo typically holds the unsigned ato-mcp binary in an EDR sandbox for
-echo about 20 minutes before allowing execution. This is normal — wait it
-echo out and the MCP server will start working without further action.
+echo The plugin now uses the Rust binary above. No bundled Python runtime,
+echo Python wheels, openpyxl, xlwings, python-docx, or python-pptx are used.
+echo WinCOM commands still require Microsoft Office on Windows.
 echo ============================================================
 
 endlocal

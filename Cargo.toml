@@ -1,0 +1,22 @@
+[package]
+name = "office-tools"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Rust Office document primitives and MCP server for agent workflows"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+calamine = "0.35"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+regex = "1.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.23"
+xmltree = "0.11"
+zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.23"

@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "ato": {
+    "office-tools": {
       "command": "cmd",
       "args": [
         "/c",
-        "\"%CLAUDE_PLUGIN_ROOT%\\python-base\\python.exe\" \"%CLAUDE_PLUGIN_ROOT%\\bootstrap\\ato_mcp_launcher.py\" serve"
+        "\"%CLAUDE_PLUGIN_ROOT%\\bin\\office-tools.exe\" mcp serve"
       ]
     }
   }

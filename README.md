@@ -1,28 +1,124 @@
 # office-tools
 
-A Claude Code / Codex plugin bundling four office-productivity capabilities for Windows agents:
+Rust Office document primitives for agents. The project no longer bundles or
+requires Python, openpyxl, xlwings, python-docx, python-pptx, or pywin32.
 
-| Skill        | Purpose |
-|--------------|---------|
-| `xlsx`       | Read, search, edit Excel workbooks. OOXML engine for closed workbooks, Excel COM for live ones. |
-| `docx`       | Read and find/replace Word documents via python-docx + Word COM. |
-| `pptx`       | Build 16:9 PowerPoint decks from a JSON spec. Branding is read from `brand.toml` — defaults are neutral; override via plugin user config. |
-| `ato` (MCP)  | Search and retrieve the Australian Taxation Office legal corpus through the [ato-mcp](https://github.com/gunba/ato-mcp) Rust server. |
+| Area | Purpose |
+| --- | --- |
+| `xlsx` | Deepest support. Read/search with Rust, edit workbook XML package parts directly, preserve unrelated OOXML such as conditional formatting and data validation, and use Excel COM only when Excel-native behavior is required. |
+| `docx` | Read as markdown, direct XML replacement, generic document composition, and optional Word COM replacement for formatting-sensitive edits. |
+| `pptx` | Read slide text, extract notes, and build simple 16:9 decks from JSON specs. |
+| `outlook` | Read-only Outlook COM mail search, meeting request extraction, `.msg` saving, and attachment saving. No send command exists. |
+| `package` | Raw OOXML zip part list/read/write/delete primitives for agent scripts. |
+| `mcp` | Stdio MCP server exposing the same primitives as tools. |
 
-The repository **is** a local marketplace plus its single plugin. Both Claude Code and Codex accept the same `.claude-plugin/plugin.json` manifest, so one install pipeline covers both.
+## Build
+
+```bash
+cargo build --release
+```
+
+Windows plugin installs copy `target\release\office-tools.exe` to
+`plugins\office-tools\bin\office-tools.exe` via `install.bat`.
+
+CI runs release builds on Linux and Windows and uploads the resulting binaries
+as workflow artifacts, including `office-tools-windows-x64`. Pushing a `v*`
+tag, such as `v0.1.0`, also publishes a GitHub Release with the Windows `.exe`,
+the Linux binary, and `SHA256SUMS`.
+
+## CLI Examples
+
+```bash
+office-tools xlsx list-sheets workbook.xlsx
+office-tools xlsx list-sheets workbook.xlsx --json  # includes sheet_id and hidden/veryHidden state
+office-tools xlsx read workbook.xlsx --sheet "Sheet1" --range A1:D20
+office-tools xlsx cells workbook.xlsx --sheet "Sheet1" --range A1:D20 --json
+office-tools xlsx search workbook.xlsx --query "revenue"
+office-tools xlsx inspect workbook.xlsx --sheet "Sheet1"
+office-tools xlsx relationships workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx formulas workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx tables workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx validations workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx conditional-formatting workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx hyperlinks workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx comments workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx defined-names workbook.xlsx --json
+office-tools xlsx merged-ranges workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx auto-filters workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx protections workbook.xlsx --sheet "Sheet1" --json
+office-tools xlsx create workbook.json --output workbook.xlsx
+office-tools xlsx edit workbook.xlsx --sheet "Sheet1" --cell B2 --value "123"
+office-tools xlsx edit workbook.xlsx --edits-file edits.json
+office-tools xlsx add-sheet workbook.xlsx Support --after Sheet1
+office-tools xlsx move-sheet workbook.xlsx Support --before Sheet1
+office-tools xlsx rename-sheet workbook.xlsx --sheet Support --name Analysis
+office-tools xlsx autofit workbook.xlsx --sheet Analysis --axis columns
+office-tools xlsx format workbook.xlsx --sheet Analysis --range B:B --number-format "#,##0.00"
+
+office-tools docx read input.docx
+office-tools docx replace input.docx --find old --replace new --output output.docx
+office-tools docx replace input.docx --find old --replace new --engine com
+office-tools docx compose spec.json --output output.docx
+
+office-tools pptx read deck.pptx
+office-tools pptx notes deck.pptx
+office-tools pptx build deck.json --output deck.pptx
+
+office-tools outlook --days 7 --include-read --search "invoice" --folder received
+
+office-tools package list-parts workbook.xlsx --json  # includes content_type and sizes
+office-tools package read-part workbook.xlsx xl/workbook.xml
+office-tools package read-part workbook.xlsx xl/media/image1.png --base64
+office-tools package write-part workbook.xlsx custom/info.xml --text "<root/>"
+office-tools package write-part workbook.xlsx custom/data.bin --base64 "AAEC/w=="
+
+office-tools doctor
+```
+
+## Windows COM Smoke Test
+
+On a Windows machine with Microsoft Office and Outlook configured:
+
+```powershell
+cargo build --release
+.\scripts\windows-wincom-smoke.ps1
+```
+
+The smoke test is non-destructive: it creates temporary Excel/Word files,
+exercises Excel validate/insert/copy-sheets, Word COM replace, and one read-only
+Outlook query, then deletes its temporary directory unless `-KeepTemp` is passed.
+
+See [docs/completion-audit.md](docs/completion-audit.md) for the requirement
+mapping and current verification status.
+
+## MCP
+
+The plugin registers:
+
+```bash
+office-tools mcp serve
+```
+
+The MCP server exposes tools for XLSX read/cells/list/search/inspect/relationships/formulas/tables,
+validations, conditional formatting, hyperlinks, comments, defined names, merged
+ranges, auto-filter ranges, and protection settings, create/edit, sheet add/move/rename,
+validate/insert/autofit/format/copy, DOCX read/replace/compose with engine
+selection, PPTX read/notes/build, read-only Outlook mail search, and raw OOXML
+package part operations.
 
 ## Install
 
-Clone or download a zip of this repo into a non-OneDrive path (`%LOCALAPPDATA%` is a good default; OneDrive-synced paths break the embedded Python and the ato-mcp corpus). Then:
+From the repo root on Windows:
 
 ```bat
-:: From the repo root
 install.bat
 ```
 
-The script runs the appropriate `plugin marketplace add` + `plugin install` commands for whichever of `claude` / `codex` are on PATH. The plugin's Python dependencies (openpyxl, xlwings, python-docx, python-pptx, lxml, pywin32) lazily pip-install into the plugin's persistent data directory on the first tool call — there is nothing to install manually.
+The installer requires Rust Cargo on `PATH`, builds the release binary, copies
+it into the plugin, and registers the local marketplace for Claude Code and
+Codex when those CLIs are available.
 
-Equivalent manual install:
+Manual plugin registration remains:
 
 ```bat
 claude plugin marketplace add <repo-path>
@@ -32,78 +128,21 @@ codex plugin marketplace add <repo-path>
 codex plugin add office-tools@office-tools
 ```
 
-Codex versions prior to 0.129 do not ship `codex plugin add`; `install.bat` detects this and instructs the user to upgrade Codex.
-
-## First-use caveat: ato-mcp
-
-The `ato` MCP server is a Rust binary, downloaded lazily on first invocation into the plugin's persistent data directory. Two things to expect on a managed Windows machine:
-
-1. **EDR sandbox (~20 minutes).** The binary is unsigned; Windows Defender / CrowdStrike / SentinelOne typically hold it in a sandbox queue before allowing execution. MCP calls fail until EDR releases the binary. This is normal — wait it out.
-2. **Corpus install (~4 GB).** The binary itself does not ship the corpus. On first MCP call it asks the host: "ATO corpus not yet installed; run `ato-mcp update`". Do that once in a terminal, then restart the MCP client. See [skills/ato/SKILL.md](plugins/office-tools/skills/ato/SKILL.md) for the absolute path.
-
-## Uninstall
-
-```bat
-uninstall.bat
-```
-
-The plugin's cache directory, skills, and MCP server registration are removed by the CLI. Persistent plugin data (cached corpus, pip-installed wheels) goes with the `plugin uninstall` step.
-
-## Enterprise deployment
-
-To push office-tools to many laptops without each user running `install.bat`, drop a managed config that pre-registers the marketplace and enables the plugin:
-
-**Claude Code** — `C:\Program Files\ClaudeCode\managed-settings.json`:
-
-```json
-{
-  "extraKnownMarketplaces": {
-    "office-tools": {
-      "source": { "source": "directory", "path": "\\\\fileserver\\share\\office-tools" }
-    }
-  },
-  "enabledPlugins": {
-    "office-tools@office-tools": true
-  }
-}
-```
-
-**Codex** — `%ProgramData%\OpenAI\Codex\managed_config.toml`:
-
-```toml
-[marketplaces.office-tools]
-source_type = "local"
-source      = "\\\\fileserver\\share\\office-tools"
-
-[plugins."office-tools@office-tools"]
-enabled = true
-```
-
-Distribute the repo tree to a file share or bake it into the laptop image. The plugin handles its own dependency install lazily on first tool call.
-
-## Brand override (pptx)
-
-The pptx tool's default palette is neutral dark blue and grey, no logo. To match a firm or team brand, set the `BRAND_TOML_PATH` plugin user config to the absolute path of a `brand.toml` you maintain elsewhere on disk. See [plugins/office-tools/tools/pptx/brand.default.toml](plugins/office-tools/tools/pptx/brand.default.toml) for the schema; any subset of keys overrides the corresponding defaults.
-
 ## Layout
 
 ```
 office-tools/
-├── .claude-plugin/marketplace.json        # marketplace manifest (Claude Code)
-├── .agents/plugins/marketplace.json       # marketplace manifest (Codex)
+├── Cargo.toml
+├── src/                         # Rust CLI, library, and MCP server
 ├── install.bat
 ├── uninstall.bat
-└── plugins/office-tools/                  # the plugin
-    ├── .claude-plugin/plugin.json         # honoured by both Claude Code and Codex
-    ├── .mcp.json                          # registers the ato MCP server
-    ├── skills/{xlsx,docx,pptx,ato,hello}  # SKILL.md per skill
-    ├── tools/{xlsx,docx,pptx}             # Python tool sources
-    ├── bootstrap/                         # pip wrapper, ato-mcp launcher
-    ├── python-base/                       # embedded Windows Python 3.13
-    ├── wheels/                            # offline-install dependency wheels
-    └── requirements.txt
+└── plugins/office-tools/
+    ├── .claude-plugin/plugin.json
+    ├── .mcp.json
+    ├── bin/                     # release binary copied here by install.bat
+    └── skills/{xlsx,docx,pptx,outlook,ooxml}
 ```
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

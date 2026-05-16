@@ -34,7 +34,8 @@ if %errorlevel% equ 0 (
     echo.
 )
 
-echo Uninstall complete. Persistent plugin data (cached corpus, pip-installed
-echo wheels) was removed by the CLI's plugin uninstall step.
+echo Uninstall complete. The local build artefact at
+echo plugins\office-tools\bin\office-tools.exe is not required after uninstall
+echo and can be deleted with the repo checkout if desired.
 
 endlocal

@@ -1,21 +1,13 @@
 {
   "name": "office-tools",
-  "version": "0.0.1",
-  "description": "Office productivity skills (xlsx/docx/pptx) and the ATO legal corpus MCP server, packaged for Claude Code and Codex.",
+  "version": "0.1.0",
+  "description": "Rust Office document primitives for xlsx/docx/pptx, read-only Outlook, and MCP agent workflows.",
   "author": {
     "name": "gunba"
   },
   "homepage": "https://github.com/gunba/office-tools",
   "license": "MIT",
-  "keywords": ["office", "xlsx", "docx", "pptx", "ato", "mcp"],
+  "keywords": ["office", "xlsx", "docx", "pptx", "outlook", "ooxml", "mcp"],
   "skills": "./skills",
-  "commands": "./commands",
-  "mcpServers": "./.mcp.json",
-  "userConfig": {
-    "BRAND_TOML_PATH": {
-      "type": "string",
-      "default": "",
-      "description": "Optional absolute path to a brand.toml that overrides the pptx tool's default palette/fonts/logo. Empty = use the neutral defaults shipped with the plugin. See tools/pptx/brand.default.toml for the schema."
-    }
-  }
+  "mcpServers": "./.mcp.json"
 }
