@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ato": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "\"%CLAUDE_PLUGIN_ROOT%\\python-base\\python.exe\" \"%CLAUDE_PLUGIN_ROOT%\\bootstrap\\ato_mcp_launcher.py\" serve"
+      ]
+    }
+  }
+}

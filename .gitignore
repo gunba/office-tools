@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd.bak
+.DS_Store
+Thumbs.db
+
+# Plugin runtime artefacts (never committed; live in ${CLAUDE_PLUGIN_DATA})
+plugins/office-tools/python-base/Lib/site-packages/
+plugins/office-tools/python-base/Scripts/pip*.exe
+plugins/office-tools/python-base/Scripts/pip*-script.py
+plugins/office-tools/python-base/Scripts/wheel*.exe
+plugins/office-tools/python-base/Scripts/wheel*-script.py
