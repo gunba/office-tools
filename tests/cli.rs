@@ -765,13 +765,18 @@ fn mcp_tools_list_exposes_office_primitives() -> anyhow::Result<()> {
         "office_doctor",
         "package_write_part",
         "package_delete_part",
-        "oneOf",
         "date1904",
         "blocks",
         "slides",
     ] {
         assert!(stdout.contains(tool), "missing MCP tool {tool}");
     }
+    assert!(
+        !stdout.contains("\"oneOf\"")
+            && !stdout.contains("\"allOf\"")
+            && !stdout.contains("\"anyOf\""),
+        "tool schema must not use top-level oneOf/allOf/anyOf - Claude rejects it"
+    );
     Ok(())
 }
 
