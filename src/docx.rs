@@ -88,6 +88,8 @@ pub struct ComposeSpec {
     pub brand: BrandSpec,
     #[serde(default)]
     pub blocks: Vec<DocxBlock>,
+    #[serde(default)]
+    pub template: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -405,6 +407,10 @@ pub fn compose_from_file(spec_path: &Path, output: &Path) -> Result<()> {
 }
 
 pub fn compose_docx(spec: &ComposeSpec, output: &Path) -> Result<()> {
+    if let Some(template) = spec.template.clone() {
+        return compose_into_template(spec, &template, output);
+    }
+
     let mut body = String::new();
     let mut footnotes = Vec::new();
     for block in &spec.blocks {
@@ -461,6 +467,90 @@ pub fn compose_docx(spec: &ComposeSpec, output: &Path) -> Result<()> {
         );
     }
     write_new_package(output, &parts)
+}
+
+fn compose_into_template(spec: &ComposeSpec, template: &Path, output: &Path) -> Result<()> {
+    if !template.is_file() {
+        bail!("template not found: {}", template.display());
+    }
+    let mut body = String::new();
+    let mut footnotes = Vec::new();
+    for block in &spec.blocks {
+        render_block(block, &spec.brand, &mut body, &mut footnotes);
+    }
+    if !footnotes.is_empty() {
+        bail!(
+            "footnote blocks are not yet supported in template mode; the template's footnotes part would need to be merged"
+        );
+    }
+
+    let template_doc_bytes = read_part(template, "word/document.xml")
+        .with_context(|| format!("read word/document.xml from {}", template.display()))?;
+    let template_doc = String::from_utf8(template_doc_bytes)
+        .context("template word/document.xml is not valid UTF-8")?;
+
+    let doc_open = extract_document_open_tag(&template_doc)
+        .ok_or_else(|| anyhow!("template word/document.xml missing <w:document>"))?;
+    let sect_pr = extract_last_sect_pr(&template_doc).unwrap_or_default();
+
+    let new_doc = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>{doc_open}<w:body>{body}{sect_pr}</w:body></w:document>"#
+    );
+
+    if let Some(parent) = output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(template, output).with_context(|| {
+        format!(
+            "copy template {} to {}",
+            template.display(),
+            output.display()
+        )
+    })?;
+
+    let mut updates = PartMap::new();
+    updates.insert("word/document.xml".to_string(), new_doc.into_bytes());
+    rewrite_parts(output, &updates, std::iter::empty::<&str>())?;
+    Ok(())
+}
+
+fn extract_document_open_tag(xml: &str) -> Option<String> {
+    let start = xml.find("<w:document")?;
+    let after = &xml[start..];
+    let mut depth = 0usize;
+    for (i, c) in after.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' if depth == 1 => return Some(after[..=i].to_string()),
+            '>' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn extract_last_sect_pr(xml: &str) -> Option<String> {
+    let body_start = xml.find("<w:body")?;
+    let body_end = xml.find("</w:body>")?;
+    if body_end <= body_start {
+        return None;
+    }
+    let body = &xml[body_start..body_end];
+    let sect_start = body.rfind("<w:sectPr")?;
+    let after = &body[sect_start..];
+    if let Some(close_rel) = after.find("</w:sectPr>") {
+        let end = close_rel + "</w:sectPr>".len();
+        Some(after[..end].to_string())
+    } else {
+        let tag_end = after.find('>')?;
+        if after[..tag_end].ends_with('/') {
+            Some(after[..=tag_end].to_string())
+        } else {
+            None
+        }
+    }
 }
 
 fn render_block(
@@ -1117,6 +1207,7 @@ mod tests {
                     first_col_bold: false,
                 },
             ],
+            template: None,
         };
         compose_docx(&spec, &path)?;
         let markdown = read_docx_markdown(&path)?;
@@ -1125,6 +1216,75 @@ mod tests {
         assert!(markdown.contains("Body text"));
         assert!(markdown.contains("| A | B |"));
         assert!(footnotes.contains("Footnote text"));
+        Ok(())
+    }
+
+    #[test]
+    fn compose_into_template_preserves_template_parts_and_replaces_body() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let template = dir.path().join("template.docx");
+        let output = dir.path().join("output.docx");
+
+        // Create a "template" by composing a docx with a sentinel block + footer.
+        // The template carries word/footer1.xml; compose_into_template must
+        // preserve that part while replacing only the body.
+        let template_spec = ComposeSpec {
+            meta: ComposeMeta {
+                title: None,
+                subject: None,
+                creator: None,
+                footer_text: Some("TEMPLATE FOOTER".to_string()),
+            },
+            brand: BrandSpec::default(),
+            blocks: vec![DocxBlock::Body {
+                text: "PLACEHOLDER_BODY_TEXT".to_string(),
+                bold: false,
+                footnote: None,
+            }],
+            template: None,
+        };
+        compose_docx(&template_spec, &template)?;
+
+        // Compose into the template - body should be replaced, footer kept.
+        let into_spec = ComposeSpec {
+            meta: ComposeMeta::default(),
+            brand: BrandSpec::default(),
+            blocks: vec![
+                DocxBlock::Heading {
+                    text: "Composed Heading".to_string(),
+                    level: 1,
+                    page_break: false,
+                },
+                DocxBlock::Body {
+                    text: "Composed body content".to_string(),
+                    bold: false,
+                    footnote: None,
+                },
+            ],
+            template: Some(template.clone()),
+        };
+        compose_docx(&into_spec, &output)?;
+
+        let markdown = read_docx_markdown(&output)?;
+        assert!(
+            markdown.contains("Composed Heading"),
+            "new body missing: {markdown}"
+        );
+        assert!(
+            markdown.contains("Composed body content"),
+            "new body missing: {markdown}"
+        );
+        assert!(
+            !markdown.contains("PLACEHOLDER_BODY_TEXT"),
+            "template body should be replaced, found placeholder in: {markdown}"
+        );
+
+        // The footer part from the template must still be present in the output package.
+        let footer = crate::ooxml::read_part_to_string(&output, "word/footer1.xml")?;
+        assert!(
+            footer.contains("TEMPLATE FOOTER"),
+            "template footer should be preserved: {footer}"
+        );
         Ok(())
     }
 }
