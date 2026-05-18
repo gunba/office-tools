@@ -367,7 +367,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "docx_compose",
-            "Compose a new generic DOCX from a structured JSON spec.",
+            "Compose a DOCX from a structured JSON spec. Optionally provide spec.template (path to an existing .docx) to compose into a branded template - the template's styles, headers, footers, embedded media (logo), and page setup are preserved; only the body is replaced with the composed blocks.",
             docx_compose_input_schema(),
         ),
         tool(
@@ -534,6 +534,10 @@ fn docx_compose_input_schema() -> Value {
                             },
                             "required": ["type"]
                         }
+                    },
+                    "template": {
+                        "type": "string",
+                        "description": "Optional path to an existing .docx to compose into. When set, the template's styles, headers, footers, embedded media (logo etc.), and page setup are preserved; only the document body is replaced with the composed blocks. meta.footer_text is ignored in template mode. Footnote blocks are not yet supported in template mode."
                     }
                 }
             }
