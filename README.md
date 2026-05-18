@@ -196,6 +196,21 @@ powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 Removes the binary directory and unregisters the marketplace from Claude Code
 and Codex.
 
+### Updating
+
+Once installed, the plugin exposes two slash commands for keeping the
+binary current:
+
+- `/office-tools:version` — print the installed version and the latest
+  published release version side by side.
+- `/office-tools:update` — same comparison, plus a one-liner you can run
+  to upgrade (`install.ps1 -Tag v<latest>`). After the upgrade, restart
+  Claude so the MCP server picks up the new binary.
+
+The commands are MCP-free — they only need PowerShell and HTTPS access to
+`api.github.com`, so they work even when `office-tools mcp serve` itself is
+failing to start.
+
 ## Layout
 
 ```
@@ -207,6 +222,7 @@ office-tools/
 └── plugins/office-tools/        # pure metadata; no binaries
     ├── .claude-plugin/plugin.json
     ├── .mcp.json                # points at %LOCALAPPDATA%\Temp\office-tools\office-tools.exe
+    ├── commands/{update,version}.md
     └── skills/{xlsx,docx,pptx,outlook,ooxml}
 ```
 
