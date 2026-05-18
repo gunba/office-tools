@@ -5,7 +5,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'office-tools')
+    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Temp\office-tools')
 )
 
 $ErrorActionPreference = 'Stop'

@@ -1,8 +1,16 @@
 # office-tools installer (Windows, PowerShell)
 #
 # Downloads the latest office-tools release binary, drops it under
-# %LOCALAPPDATA%\office-tools\, then registers the plugin marketplace
+# %LOCALAPPDATA%\Temp\office-tools\, then registers the plugin marketplace
 # with whichever of Claude Code or Codex CLI is on PATH.
+#
+# Why %LOCALAPPDATA%\Temp (a.k.a. %TEMP%): on a typical corporate Windows
+# image, Defender Attack Surface Reduction rule "Block executable files...
+# not from a trusted list" refuses exec of unsigned binaries from most of
+# the user profile (Desktop, Documents, .cargo\bin, AppData\Local\Programs,
+# etc.) but allows exec from %TEMP%. Installing here keeps the default
+# install runnable on enterprise endpoints; pass -InstallDir to override
+# for unrestricted machines.
 #
 # Usage (run from the repo root):
 #   powershell -ExecutionPolicy Bypass -File .\install.ps1
@@ -10,13 +18,13 @@
 # Optional flags:
 #   -Tag <tag>           Install a specific tag (e.g. v0.1.0). Default: latest.
 #   -InstallDir <path>   Override binary install location.
-#                        Default: $env:LOCALAPPDATA\office-tools.
+#                        Default: $env:LOCALAPPDATA\Temp\office-tools.
 #   -SkipRegister        Skip claude/codex marketplace registration.
 
 [CmdletBinding()]
 param(
     [string]$Tag = 'latest',
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'office-tools'),
+    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Temp\office-tools'),
     [switch]$SkipRegister
 )
 

@@ -4,7 +4,7 @@
       "command": "cmd",
       "args": [
         "/c",
-        "\"%LOCALAPPDATA%\\office-tools\\office-tools.exe\" mcp serve"
+        "\"%LOCALAPPDATA%\\Temp\\office-tools\\office-tools.exe\" mcp serve"
       ]
     }
   }
