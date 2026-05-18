@@ -457,14 +457,15 @@ $checks += Test-Com 'Outlook.Application' {
 }
 
 fn run_powershell(script: &str) -> Result<String> {
-    let mut file = tempfile::NamedTempFile::new()?;
+    let mut file = tempfile::Builder::new().suffix(".ps1").tempfile()?;
     file.write_all(script.as_bytes())?;
+    let path = file.into_temp_path();
     let output = Command::new("powershell.exe")
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
         .arg("-File")
-        .arg(file.path())
+        .arg(&path)
         .output()
         .context("run powershell.exe")?;
     if !output.status.success() {
