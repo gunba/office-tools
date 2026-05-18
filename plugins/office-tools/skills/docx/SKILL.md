@@ -7,7 +7,7 @@ description: Read, replace, or compose Microsoft Word .docx documents using the 
 Use:
 
 ```bash
-"%LOCALAPPDATA%\office-tools\office-tools.exe" docx <command>
+"%LOCALAPPDATA%\Temp\office-tools\office-tools.exe" docx <command>
 ```
 
 Local development:

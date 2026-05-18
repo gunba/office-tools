@@ -7,7 +7,7 @@ description: Read, build, or extract notes from Microsoft PowerPoint .pptx decks
 Use:
 
 ```bash
-"%LOCALAPPDATA%\office-tools\office-tools.exe" pptx <command>
+"%LOCALAPPDATA%\Temp\office-tools\office-tools.exe" pptx <command>
 ```
 
 Local development:

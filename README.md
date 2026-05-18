@@ -108,9 +108,18 @@ package part operations.
 
 ## Install
 
-The plugin loads `office-tools.exe` from `%LOCALAPPDATA%\office-tools\` at
+The plugin loads `office-tools.exe` from `%LOCALAPPDATA%\Temp\office-tools\` at
 runtime. The repo no longer ships a `plugins\office-tools\bin\` directory or a
 batch installer — the binary is staged from a GitHub release.
+
+The default install path is `%LOCALAPPDATA%\Temp\office-tools` (i.e. `%TEMP%\office-tools`)
+on purpose: on a typical corporate Windows image, Defender Attack Surface
+Reduction rule "Block executable files… not from a trusted list" refuses to
+exec unsigned binaries from most user-profile paths (`Desktop\`, `Documents\`,
+`.cargo\bin\`, `AppData\Local\Programs\`, `C:\dev\`, etc.) but allows exec from
+`%TEMP%`. Installing there keeps the plugin runnable on locked-down endpoints
+without filing an IT ticket. Pass `-InstallDir <path>` to override on
+unrestricted machines.
 
 ### Recommended: `install.ps1`
 
@@ -121,8 +130,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 This downloads `office-tools-windows-x64.zip` from the latest release, extracts
-it into `%LOCALAPPDATA%\office-tools\`, verifies the binary runs, and (when the
-CLIs are on `PATH`) registers the marketplace with Claude Code and Codex.
+it into `%LOCALAPPDATA%\Temp\office-tools\`, verifies the binary runs, and
+(when the CLIs are on `PATH`) registers the marketplace with Claude Code and
+Codex.
 
 Flags:
 
@@ -136,8 +146,8 @@ If you prefer to wire things up by hand:
 
 1. Download `office-tools-windows-x64.zip` from
    <https://github.com/gunba/office-tools/releases/latest> and extract to
-   `%LOCALAPPDATA%\office-tools\` (so the path becomes
-   `%LOCALAPPDATA%\office-tools\office-tools.exe`).
+   `%LOCALAPPDATA%\Temp\office-tools\` (so the path becomes
+   `%LOCALAPPDATA%\Temp\office-tools\office-tools.exe`).
 2. Register the marketplace:
    ```
    claude plugin marketplace add <path-to-this-repo>
@@ -149,19 +159,33 @@ If you prefer to wire things up by hand:
 3. For Codex, add an MCP server entry to `~/.codex/config.toml`:
    ```toml
    [mcp_servers.office-tools]
-   command = 'C:\Users\<you>\AppData\Local\office-tools\office-tools.exe'
+   command = 'C:\Users\<you>\AppData\Local\Temp\office-tools\office-tools.exe'
    args = ["mcp", "serve"]
    enabled = true
    ```
+4. For Claude Code, add the same server to `~/.claude.json` `mcpServers`:
+   ```json
+   "office-tools": {
+     "type": "stdio",
+     "command": "C:\\Users\\<you>\\AppData\\Local\\Temp\\office-tools\\office-tools.exe",
+     "args": ["mcp", "serve"]
+   }
+   ```
 
-### Endpoint security note
+### Endpoint security override
 
-Some corporate endpoint policies (Defender ASR's "Block executable files… not
-from trusted list", etc.) refuse to execute unsigned binaries from
-`%LOCALAPPDATA%\office-tools\`. If `install.ps1` exits with `Access is denied`,
-either ask IT to add an exclusion for that directory, or install elsewhere
-with `-InstallDir <path>` and update `plugins\office-tools\.mcp.json` plus the
-skill files to point at the chosen path.
+If you have an unrestricted machine and prefer a stable per-app dir over
+`%TEMP%`, install with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -InstallDir "$env:LOCALAPPDATA\office-tools"
+```
+
+You will then need to update the path in `plugins\office-tools\.mcp.json`, the
+five `plugins\office-tools\skills\*\SKILL.md` files, and the matching Claude
+and Codex MCP server entries to match. The default ships pointing at the
+`%TEMP%` path because that is the path that is exec-permitted on the broadest
+set of corporate endpoints.
 
 ### Uninstall
 
@@ -182,11 +206,11 @@ office-tools/
 ├── uninstall.ps1
 └── plugins/office-tools/        # pure metadata; no binaries
     ├── .claude-plugin/plugin.json
-    ├── .mcp.json                # points at %LOCALAPPDATA%\office-tools\office-tools.exe
+    ├── .mcp.json                # points at %LOCALAPPDATA%\Temp\office-tools\office-tools.exe
     └── skills/{xlsx,docx,pptx,outlook,ooxml}
 ```
 
-The runtime binary lives outside the repo, at `%LOCALAPPDATA%\office-tools\office-tools.exe`.
+The runtime binary lives outside the repo, at `%LOCALAPPDATA%\Temp\office-tools\office-tools.exe`.
 
 ## License
 
