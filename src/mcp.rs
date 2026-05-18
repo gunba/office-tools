@@ -986,8 +986,8 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
 
 fn write_message(writer: &mut impl Write, message: &Value) -> Result<()> {
     let data = serde_json::to_vec(message)?;
-    write!(writer, "Content-Length: {}\r\n\r\n", data.len())?;
     writer.write_all(&data)?;
+    writer.write_all(b"\n")?;
     writer.flush()?;
     Ok(())
 }

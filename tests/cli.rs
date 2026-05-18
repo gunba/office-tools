@@ -1043,13 +1043,16 @@ fn mcp_package_write_part_rejects_ambiguous_payloads() -> anyhow::Result<()> {
 
 fn mcp_request(request: serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let request = request.to_string();
-    let frame = format!("Content-Length: {}\r\n\r\n{}", request.len(), request);
     let mut child = Command::new(bin())
         .args(["mcp", "serve"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
-    child.stdin.as_mut().unwrap().write_all(frame.as_bytes())?;
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        stdin.write_all(request.as_bytes())?;
+        stdin.write_all(b"\n")?;
+    }
     drop(child.stdin.take());
     let output = child.wait_with_output()?;
     assert!(
@@ -1059,10 +1062,11 @@ fn mcp_request(request: serde_json::Value) -> anyhow::Result<serde_json::Value> 
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout)?;
-    let Some((_, body)) = stdout.split_once("\r\n\r\n") else {
-        anyhow::bail!("MCP response missing frame header: {stdout}");
-    };
-    Ok(serde_json::from_str(body)?)
+    let first_line = stdout
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("MCP response missing first line: {stdout}"))?;
+    Ok(serde_json::from_str(first_line)?)
 }
 
 fn minimal_xlsx_parts() -> PartMap {
