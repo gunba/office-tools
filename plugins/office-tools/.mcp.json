@@ -4,7 +4,7 @@
       "command": "cmd",
       "args": [
         "/c",
-        "\"%CLAUDE_PLUGIN_ROOT%\\bin\\office-tools.exe\" mcp serve"
+        "\"%LOCALAPPDATA%\\office-tools\\office-tools.exe\" mcp serve"
       ]
     }
   }

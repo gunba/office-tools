@@ -7,7 +7,7 @@ description: Inspect or surgically edit raw OOXML zip package parts in .xlsx, .d
 Use:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/office-tools.exe" package <command>
+"%LOCALAPPDATA%\office-tools\office-tools.exe" package <command>
 ```
 
 Local development:

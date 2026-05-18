@@ -7,7 +7,7 @@ description: Read, replace, or compose Microsoft Word .docx documents using the 
 Use:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/office-tools.exe" docx <command>
+"%LOCALAPPDATA%\office-tools\office-tools.exe" docx <command>
 ```
 
 Local development:

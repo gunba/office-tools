@@ -18,8 +18,8 @@ requires Python, openpyxl, xlwings, python-docx, python-pptx, or pywin32.
 cargo build --release
 ```
 
-Windows plugin installs copy `target\release\office-tools.exe` to
-`plugins\office-tools\bin\office-tools.exe` via `install.bat`.
+The release binary is `target\release\office-tools.exe`. Most users do not need
+to build — see [Install](#install) for the prebuilt path.
 
 CI runs release builds on Linux and Windows and uploads the resulting binaries
 as workflow artifacts, including `office-tools-windows-x64`. Pushing a `v*`
@@ -108,25 +108,69 @@ package part operations.
 
 ## Install
 
+The plugin loads `office-tools.exe` from `%LOCALAPPDATA%\office-tools\` at
+runtime. The repo no longer ships a `plugins\office-tools\bin\` directory or a
+batch installer — the binary is staged from a GitHub release.
+
+### Recommended: `install.ps1`
+
 From the repo root on Windows:
 
-```bat
-install.bat
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The installer requires Rust Cargo on `PATH`, builds the release binary, copies
-it into the plugin, and registers the local marketplace for Claude Code and
-Codex when those CLIs are available.
+This downloads `office-tools-windows-x64.zip` from the latest release, extracts
+it into `%LOCALAPPDATA%\office-tools\`, verifies the binary runs, and (when the
+CLIs are on `PATH`) registers the marketplace with Claude Code and Codex.
 
-Manual plugin registration remains:
+Flags:
 
-```bat
-claude plugin marketplace add <repo-path>
-claude plugin install office-tools@office-tools
+- `-Tag v0.1.0` — pin to a specific release tag.
+- `-InstallDir <path>` — override binary location.
+- `-SkipRegister` — only stage the binary; do not touch Claude/Codex configs.
 
-codex plugin marketplace add <repo-path>
-codex plugin add office-tools@office-tools
+### Manual install
+
+If you prefer to wire things up by hand:
+
+1. Download `office-tools-windows-x64.zip` from
+   <https://github.com/gunba/office-tools/releases/latest> and extract to
+   `%LOCALAPPDATA%\office-tools\` (so the path becomes
+   `%LOCALAPPDATA%\office-tools\office-tools.exe`).
+2. Register the marketplace:
+   ```
+   claude plugin marketplace add <path-to-this-repo>
+   claude plugin install office-tools@office-tools
+   ```
+   ```
+   codex plugin marketplace add <path-to-this-repo>
+   ```
+3. For Codex, add an MCP server entry to `~/.codex/config.toml`:
+   ```toml
+   [mcp_servers.office-tools]
+   command = 'C:\Users\<you>\AppData\Local\office-tools\office-tools.exe'
+   args = ["mcp", "serve"]
+   enabled = true
+   ```
+
+### Endpoint security note
+
+Some corporate endpoint policies (Defender ASR's "Block executable files… not
+from trusted list", etc.) refuse to execute unsigned binaries from
+`%LOCALAPPDATA%\office-tools\`. If `install.ps1` exits with `Access is denied`,
+either ask IT to add an exclusion for that directory, or install elsewhere
+with `-InstallDir <path>` and update `plugins\office-tools\.mcp.json` plus the
+skill files to point at the chosen path.
+
+### Uninstall
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
+
+Removes the binary directory and unregisters the marketplace from Claude Code
+and Codex.
 
 ## Layout
 
@@ -134,14 +178,15 @@ codex plugin add office-tools@office-tools
 office-tools/
 ├── Cargo.toml
 ├── src/                         # Rust CLI, library, and MCP server
-├── install.bat
-├── uninstall.bat
-└── plugins/office-tools/
+├── install.ps1
+├── uninstall.ps1
+└── plugins/office-tools/        # pure metadata; no binaries
     ├── .claude-plugin/plugin.json
-    ├── .mcp.json
-    ├── bin/                     # release binary copied here by install.bat
+    ├── .mcp.json                # points at %LOCALAPPDATA%\office-tools\office-tools.exe
     └── skills/{xlsx,docx,pptx,outlook,ooxml}
 ```
+
+The runtime binary lives outside the repo, at `%LOCALAPPDATA%\office-tools\office-tools.exe`.
 
 ## License
 

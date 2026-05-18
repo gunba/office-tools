@@ -7,7 +7,7 @@ description: Read-only Outlook mail and meeting search through the Rust office-t
 Use on Windows with Outlook installed and authenticated:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/office-tools.exe" outlook [options]
+"%LOCALAPPDATA%\office-tools\office-tools.exe" outlook [options]
 ```
 
 Local development:

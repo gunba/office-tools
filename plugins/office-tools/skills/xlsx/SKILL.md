@@ -7,7 +7,7 @@ description: Create, read, search, or edit Microsoft Excel .xlsx workbooks using
 Use the Rust binary:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/office-tools.exe" xlsx <command>
+"%LOCALAPPDATA%\office-tools\office-tools.exe" xlsx <command>
 ```
 
 For local development from the repo root, use:
