@@ -45,25 +45,38 @@ $apiUrl = if ($Tag -eq 'latest') {
 }
 Write-Host "Fetching release metadata from $apiUrl"
 $release = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing
-$asset = $release.assets | Where-Object { $_.name -eq 'office-tools-windows-x64.zip' } | Select-Object -First 1
-if (-not $asset) {
-    throw "Release $($release.tag_name) does not have an office-tools-windows-x64.zip asset."
+
+# Newer releases ship the binary directly as office-tools-windows-x64.exe.
+# v0.1.0 packaged it inside office-tools-windows-x64.zip. Accept either.
+$exeAsset = $release.assets | Where-Object { $_.name -eq 'office-tools-windows-x64.exe' } | Select-Object -First 1
+$zipAsset = $release.assets | Where-Object { $_.name -eq 'office-tools-windows-x64.zip' } | Select-Object -First 1
+if (-not $exeAsset -and -not $zipAsset) {
+    throw "Release $($release.tag_name) does not have an office-tools-windows-x64.exe or .zip asset."
 }
+$asset = if ($exeAsset) { $exeAsset } else { $zipAsset }
 Write-Host "  -> $($release.tag_name) / $($asset.name) ($([math]::Round($asset.size/1MB,2)) MB)"
 
-# --- Download + extract ------------------------------------------------------
-$tmpZip = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [Guid]::NewGuid().ToString('N') + '.zip')
-try {
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpZip -UseBasicParsing
-    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    Expand-Archive -Path $tmpZip -DestinationPath $InstallDir -Force
-} finally {
-    if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue }
+# --- Download + place --------------------------------------------------------
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+if ($asset.name -like '*.zip') {
+    $tmpZip = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [Guid]::NewGuid().ToString('N') + '.zip')
+    try {
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpZip -UseBasicParsing
+        Expand-Archive -Path $tmpZip -DestinationPath $InstallDir -Force
+    } finally {
+        if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue }
+    }
+} else {
+    $exePath = Join-Path $InstallDir 'office-tools.exe'
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $exePath -UseBasicParsing
 }
+
+# Strip Mark-of-the-Web so SmartScreen/AppLocker doesn't reject the file.
+Get-ChildItem $InstallDir -File -Recurse | ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
 
 # --- Verify exec -------------------------------------------------------------
 $exe = Join-Path $InstallDir 'office-tools.exe'
-if (-not (Test-Path $exe)) { throw "office-tools.exe not found at $exe after extract." }
+if (-not (Test-Path $exe)) { throw "office-tools.exe not found at $exe after install." }
 Write-Host ""
 Write-Host "Verifying binary..."
 try {
@@ -71,7 +84,14 @@ try {
     Write-Host "  $version"
 } catch {
     Write-Warning "Could not exec $exe : $($_.Exception.Message)"
-    Write-Warning "If your endpoint policy blocks exec from $InstallDir, install to a permitted path with -InstallDir <path> and update plugins/office-tools/.mcp.json accordingly."
+    Write-Warning ""
+    Write-Warning "This often means the host's Defender Attack Surface Reduction (ASR) rule"
+    Write-Warning "'Block executable files... not from a trusted list' is refusing the new"
+    Write-Warning "binary because it has no Microsoft Cloud reputation yet. Options:"
+    Write-Warning "  - Wait a day or so for Microsoft's cloud reputation to clear it, then retry."
+    Write-Warning "  - Ask IT to add a Defender ASR exclusion for $InstallDir, or to add the"
+    Write-Warning "    binary's SHA-256 to the trusted hash list."
+    Write-Warning "  - Build from source: cargo build --release."
     throw
 }
 
