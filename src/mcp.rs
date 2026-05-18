@@ -422,20 +422,16 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "package_write_part",
-            "Replace or add a raw OOXML package part from UTF-8 text or base64 bytes.",
+            "Replace or add a raw OOXML package part. Provide exactly one of `text` (UTF-8 string) or `base64` (base64-encoded bytes). The handler returns an error if neither or both are set.",
             json!({
                 "type": "object",
                 "properties": {
                     "file": { "type": "string" },
                     "part": { "type": "string" },
-                    "text": { "type": "string" },
-                    "base64": { "type": "string" }
+                    "text": { "type": "string", "description": "UTF-8 text body. Mutually exclusive with base64." },
+                    "base64": { "type": "string", "description": "Base64-encoded byte body. Mutually exclusive with text." }
                 },
-                "required": ["file", "part"],
-                "oneOf": [
-                    { "required": ["text"], "not": { "required": ["base64"] } },
-                    { "required": ["base64"], "not": { "required": ["text"] } }
-                ]
+                "required": ["file", "part"]
             }),
         ),
         tool(
