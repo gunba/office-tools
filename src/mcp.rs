@@ -530,8 +530,10 @@ fn docx_compose_input_schema() -> Value {
                                 "level": { "type": "integer" },
                                 "segments": { "type": "array" },
                                 "headers": { "type": "array", "items": { "type": "string" } },
-                                "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
-                                "col_widths_twips": { "type": "array", "items": { "type": "integer" }, "description": "For table/borderless_table: explicit column widths in twips. 1440 twips = 1 inch. Omitted columns auto-size." }
+                                "rows": { "type": "array", "description": "For table/borderless_table: each row is an array of cells. A cell can be a plain string OR an object {text, bold, italic, color} for per-cell styling (e.g. green-bold Subject line in a memo header). Backward-compatible: existing string-cell specs keep working.", "items": { "type": "array", "items": {} } },
+                                "col_widths_twips": { "type": "array", "items": { "type": "integer" }, "description": "For table/borderless_table: explicit column widths in twips. 1440 twips = 1 inch. Omitted columns auto-size." },
+                                "borders": { "type": "string", "enum": ["none", "rows", "all"], "description": "For borderless_table: 'none' (default), 'rows' (light grey lines between rows), or 'all' (full grid)." },
+                                "style": { "type": "string", "description": "For bullet: paragraph style override. Defaults to 'Bullet{level}' (template branded bullets). Set to 'ListBullet' for Word's default round bullets." }
                             },
                             "required": ["type"]
                         }

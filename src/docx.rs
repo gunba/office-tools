@@ -166,6 +166,10 @@ pub enum DocxBlock {
         bold_prefix: Option<String>,
         #[serde(default)]
         footnote: Option<String>,
+        /// Optional paragraph style override. Defaults to `Bullet{level}` (template's branded
+        /// bullets, often square). Set to e.g. "ListBullet" for Word's default round bullets.
+        #[serde(default)]
+        style: Option<String>,
     },
     Numbered {
         text: String,
@@ -183,7 +187,7 @@ pub enum DocxBlock {
     },
     Table {
         headers: Vec<String>,
-        rows: Vec<Vec<String>>,
+        rows: Vec<Vec<CellContent>>,
         #[serde(default)]
         alt_row_shading: bool,
         #[serde(default)]
@@ -192,11 +196,15 @@ pub enum DocxBlock {
         col_widths_twips: Option<Vec<usize>>,
     },
     BorderlessTable {
-        rows: Vec<Vec<String>>,
+        rows: Vec<Vec<CellContent>>,
         #[serde(default)]
         label_col: usize,
         #[serde(default)]
         col_widths_twips: Option<Vec<usize>>,
+        /// Optional border style: "none" (default), "rows" (horizontal lines between rows),
+        /// or "all" (full grid). Used to lay out memo header tables with subtle row separators.
+        #[serde(default)]
+        borders: Option<String>,
     },
     Divider,
     Spacer {
@@ -214,6 +222,43 @@ pub struct RichSegment {
     #[serde(default)]
     pub italic: bool,
     pub color: Option<String>,
+}
+
+/// A single table cell. Accepts either a plain string or a richer object with
+/// per-cell styling. With `untagged` serde, JSON strings deserialize as `Text`
+/// and JSON objects with a `text` field deserialize as `Rich`, so existing
+/// specs that pass string cells keep working unchanged.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum CellContent {
+    Text(String),
+    Rich(RichCell),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RichCell {
+    pub text: String,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    pub color: Option<String>,
+}
+
+impl CellContent {
+    pub fn as_str(&self) -> &str {
+        match self {
+            CellContent::Text(s) => s.as_str(),
+            CellContent::Rich(r) => r.text.as_str(),
+        }
+    }
+
+    pub fn rich(&self) -> Option<&RichCell> {
+        match self {
+            CellContent::Rich(r) => Some(r),
+            CellContent::Text(_) => None,
+        }
+    }
 }
 
 impl DocxArgs {
@@ -724,15 +769,18 @@ fn render_block(
             level,
             bold_prefix,
             footnote,
+            style,
         } => {
             if style_mode {
-                let style = format!("Bullet{}", level.clamp(&1, &4));
+                let resolved_style = style
+                    .clone()
+                    .unwrap_or_else(|| format!("Bullet{}", level.clamp(&1, &4)));
                 let mut runs = String::new();
                 if let Some(prefix) = bold_prefix.as_deref() {
                     runs.push_str(&plain_run(prefix, true, false));
                 }
                 runs.push_str(&plain_run(text, false, false));
-                body.push_str(&styled_paragraph(&style, "", &runs));
+                body.push_str(&styled_paragraph(&resolved_style, "", &runs));
                 return;
             }
             let indent = 360usize * (*level as usize).max(1);
@@ -829,6 +877,7 @@ fn render_block(
             rows,
             label_col,
             col_widths_twips,
+            borders,
         } => {
             body.push_str(&borderless_table(
                 rows,
@@ -836,6 +885,7 @@ fn render_block(
                 *label_col,
                 style_mode,
                 col_widths_twips.as_deref(),
+                borders.as_deref().unwrap_or("none"),
             ));
         }
         DocxBlock::Divider => body.push_str(&divider_p(&brand.accent_color)),
@@ -1017,7 +1067,7 @@ fn footnotes_xml(footnotes: &[String], brand: &BrandSpec) -> String {
 #[allow(clippy::too_many_arguments)]
 fn table(
     headers: &[String],
-    rows: &[Vec<String>],
+    rows: &[Vec<CellContent>],
     brand: &BrandSpec,
     alt_rows: bool,
     first_col_bold: bool,
@@ -1037,8 +1087,9 @@ fn table(
     out.push_str(&tbl_grid(col_widths, headers.len()));
     out.push_str("<w:tr>");
     for (col_idx, header) in headers.iter().enumerate() {
+        let cell_value = CellContent::Text(header.clone());
         out.push_str(&cell(
-            header,
+            &cell_value,
             brand,
             Some(&brand.table_header_fill),
             Some("FFFFFF"),
@@ -1073,14 +1124,28 @@ fn table(
 }
 
 fn borderless_table(
-    rows: &[Vec<String>],
+    rows: &[Vec<CellContent>],
     brand: &BrandSpec,
     label_col: usize,
     style_mode: bool,
     col_widths: Option<&[usize]>,
+    border_style: &str,
 ) -> String {
     let mut out = String::new();
-    out.push_str(r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders></w:tblPr>"#);
+    let borders_xml = match border_style {
+        "rows" => {
+            r#"<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="single" w:sz="4" w:color="D9DEE8"/><w:insideV w:val="nil"/></w:tblBorders>"#
+        }
+        "all" => {
+            r#"<w:tblBorders><w:top w:val="single" w:sz="4" w:color="D9DEE8"/><w:left w:val="single" w:sz="4" w:color="D9DEE8"/><w:bottom w:val="single" w:sz="4" w:color="D9DEE8"/><w:right w:val="single" w:sz="4" w:color="D9DEE8"/><w:insideH w:val="single" w:sz="4" w:color="D9DEE8"/><w:insideV w:val="single" w:sz="4" w:color="D9DEE8"/></w:tblBorders>"#
+        }
+        _ => {
+            r#"<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>"#
+        }
+    };
+    out.push_str(&format!(
+        r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>{borders_xml}</w:tblPr>"#
+    ));
     let row_width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
     out.push_str(&tbl_grid(col_widths, row_width));
     for row in rows {
@@ -1125,11 +1190,11 @@ fn col_width_at(col_widths: Option<&[usize]>, idx: usize) -> Option<usize> {
 
 #[allow(clippy::too_many_arguments)]
 fn cell(
-    text: &str,
+    content: &CellContent,
     brand: &BrandSpec,
     fill: Option<&str>,
-    color: Option<&str>,
-    bold: bool,
+    default_color: Option<&str>,
+    default_bold: bool,
     style_mode: bool,
     width_twips: Option<usize>,
 ) -> String {
@@ -1139,19 +1204,31 @@ fn cell(
     let width = width_twips
         .map(|w| format!(r#"<w:tcW w:w="{w}" w:type="dxa"/>"#))
         .unwrap_or_default();
+
+    // Resolve per-cell overrides on top of the row-level defaults.
+    let rich = content.rich();
+    let bold = default_bold || rich.map(|r| r.bold).unwrap_or(false);
+    let italic = rich.map(|r| r.italic).unwrap_or(false);
+    let color = rich.and_then(|r| r.color.as_deref()).or(default_color);
+    let text = content.as_str();
+
     let inner = if style_mode {
         // Header cell (with fill) — use the template's "Bodytextwhite" style so the cell
         // text is white-on-fill without inline font/color overrides. Body cells fall back
-        // to "TableBody". Bold and italic still come through as plain run properties when
-        // requested.
+        // to "TableBody". Bold/italic and per-cell color override come through as inline rPr.
         let style = if fill.is_some() {
             "Bodytextwhite"
         } else {
             "TableBody"
         };
-        styled_paragraph(style, "", &plain_run(text, bold, false))
+        let run_xml = if rich.is_some() {
+            plain_rich_run(text, bold, italic, color)
+        } else {
+            plain_run(text, bold, italic)
+        };
+        styled_paragraph(style, "", &run_xml)
     } else {
-        format!("<w:p>{}</w:p>", run(text, brand, "18", color, bold, false))
+        format!("<w:p>{}</w:p>", run(text, brand, "18", color, bold, italic))
     };
     format!(
         r#"<w:tc><w:tcPr>{width}{shading}<w:tcMar><w:top w:w="40" w:type="dxa"/><w:bottom w:w="40" w:type="dxa"/><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tcMar></w:tcPr>{inner}</w:tc>"#
@@ -1396,7 +1473,10 @@ mod tests {
                 },
                 DocxBlock::Table {
                     headers: vec!["A".to_string(), "B".to_string()],
-                    rows: vec![vec!["1".to_string(), "2".to_string()]],
+                    rows: vec![vec![
+                        CellContent::Text("1".to_string()),
+                        CellContent::Text("2".to_string()),
+                    ]],
                     alt_row_shading: true,
                     first_col_bold: false,
                     col_widths_twips: None,
