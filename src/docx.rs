@@ -414,7 +414,7 @@ pub fn compose_docx(spec: &ComposeSpec, output: &Path) -> Result<()> {
     let mut body = String::new();
     let mut footnotes = Vec::new();
     for block in &spec.blocks {
-        render_block(block, &spec.brand, &mut body, &mut footnotes);
+        render_block(block, &spec.brand, &mut body, &mut footnotes, false);
     }
     if body.trim().is_empty()
         && let Some(title) = &spec.meta.title
@@ -428,6 +428,7 @@ pub fn compose_docx(spec: &ComposeSpec, output: &Path) -> Result<()> {
             &spec.brand,
             &mut body,
             &mut footnotes,
+            false,
         );
     }
 
@@ -476,7 +477,7 @@ fn compose_into_template(spec: &ComposeSpec, template: &Path, output: &Path) -> 
     let mut body = String::new();
     let mut footnotes = Vec::new();
     for block in &spec.blocks {
-        render_block(block, &spec.brand, &mut body, &mut footnotes);
+        render_block(block, &spec.brand, &mut body, &mut footnotes, true);
     }
     if !footnotes.is_empty() {
         bail!(
@@ -558,6 +559,7 @@ fn render_block(
     brand: &BrandSpec,
     body: &mut String,
     footnotes: &mut Vec<String>,
+    style_mode: bool,
 ) {
     match block {
         DocxBlock::TitlePage {
@@ -619,6 +621,22 @@ fn render_block(
             level,
             page_break,
         } => {
+            if style_mode {
+                let style = format!("Heading{}", level.clamp(&1, &9));
+                let extra = if *level == 1 && !page_break {
+                    r#"<w:pageBreakBefore w:val="0"/>"#
+                } else if *page_break && *level != 1 {
+                    "<w:pageBreakBefore/>"
+                } else {
+                    ""
+                };
+                body.push_str(&styled_paragraph(
+                    &style,
+                    extra,
+                    &plain_run(text, false, false),
+                ));
+                return;
+            }
             if *page_break {
                 body.push_str(&page_break_p());
             }
@@ -644,6 +662,18 @@ fn render_block(
             bold,
             footnote,
         } => {
+            if style_mode {
+                if footnote.is_some() {
+                    // Footnotes aren't supported in template mode (see compose_into_template).
+                    // Surface the body text without the footnote reference rather than dropping the paragraph.
+                }
+                body.push_str(&styled_paragraph(
+                    "BodyText",
+                    "",
+                    &plain_run(text, *bold, false),
+                ));
+                return;
+            }
             let mut paragraph_xml = paragraph(
                 None,
                 text,
@@ -659,6 +689,19 @@ fn render_block(
             body.push_str(&paragraph_xml);
         }
         DocxBlock::BodyRich { segments } => {
+            if style_mode {
+                let mut runs = String::new();
+                for segment in segments {
+                    runs.push_str(&plain_rich_run(
+                        &segment.text,
+                        segment.bold,
+                        segment.italic,
+                        segment.color.as_deref(),
+                    ));
+                }
+                body.push_str(&styled_paragraph("BodyText", "", &runs));
+                return;
+            }
             body.push_str("<w:p>");
             for segment in segments {
                 body.push_str(&run(
@@ -678,6 +721,16 @@ fn render_block(
             bold_prefix,
             footnote,
         } => {
+            if style_mode {
+                let style = format!("Bullet{}", level.clamp(&1, &4));
+                let mut runs = String::new();
+                if let Some(prefix) = bold_prefix.as_deref() {
+                    runs.push_str(&plain_run(prefix, true, false));
+                }
+                runs.push_str(&plain_run(text, false, false));
+                body.push_str(&styled_paragraph(&style, "", &runs));
+                return;
+            }
             let indent = 360usize * (*level as usize).max(1);
             let note = footnote
                 .as_ref()
@@ -699,6 +752,15 @@ fn render_block(
             bold_prefix,
             footnote,
         } => {
+            if style_mode {
+                let mut runs = String::new();
+                if let Some(prefix) = bold_prefix.as_deref() {
+                    runs.push_str(&plain_run(prefix, true, false));
+                }
+                runs.push_str(&plain_run(text, false, false));
+                body.push_str(&styled_paragraph("ListNumber", "", &runs));
+                return;
+            }
             let note = footnote
                 .as_ref()
                 .map(|text| footnote_ref(footnotes, text))
@@ -721,6 +783,14 @@ fn render_block(
             ));
         }
         DocxBlock::Quote { text } => {
+            if style_mode {
+                body.push_str(&styled_paragraph(
+                    "Quote",
+                    "",
+                    &plain_run(text, false, true),
+                ));
+                return;
+            }
             body.push_str(&format!(
                 r#"<w:p><w:pPr><w:ind w:left="567"/></w:pPr>{}</w:p>"#,
                 run(text, brand, "18", Some(&brand.body_color), false, true)
@@ -747,9 +817,10 @@ fn render_block(
             *alt_row_shading,
             *first_col_bold,
             true,
+            style_mode,
         )),
         DocxBlock::BorderlessTable { rows, label_col } => {
-            body.push_str(&borderless_table(rows, brand, *label_col));
+            body.push_str(&borderless_table(rows, brand, *label_col, style_mode));
         }
         DocxBlock::Divider => body.push_str(&divider_p(&brand.accent_color)),
         DocxBlock::Spacer { height_twips } => body.push_str(&spacer_p(*height_twips)),
@@ -772,6 +843,55 @@ fn paragraph(
     format!(
         "<w:p>{style_xml}{}</w:p>",
         run(text, brand, size, color, bold, italic)
+    )
+}
+
+/// Build a paragraph that references a named style and contains pre-rendered runs.
+/// `extra_ppr` is inserted inside `<w:pPr>` after the `<w:pStyle>` reference;
+/// callers use it to override pageBreakBefore or similar style-defined behaviour.
+fn styled_paragraph(style: &str, extra_ppr: &str, content_runs: &str) -> String {
+    format!(r#"<w:p><w:pPr><w:pStyle w:val="{style}"/>{extra_ppr}</w:pPr>{content_runs}</w:p>"#)
+}
+
+/// A `<w:r>` with only the bare run properties — no font/color/size, since the
+/// surrounding paragraph style is expected to carry typography.
+fn plain_run(text: &str, bold: bool, italic: bool) -> String {
+    let mut rpr = String::new();
+    if bold || italic {
+        rpr.push_str("<w:rPr>");
+        if bold {
+            rpr.push_str("<w:b/>");
+        }
+        if italic {
+            rpr.push_str("<w:i/>");
+        }
+        rpr.push_str("</w:rPr>");
+    }
+    format!(
+        r#"<w:r>{rpr}<w:t xml:space="preserve">{}</w:t></w:r>"#,
+        escaped(text)
+    )
+}
+
+/// Plain run with an optional explicit color override (still no font/size).
+fn plain_rich_run(text: &str, bold: bool, italic: bool, color: Option<&str>) -> String {
+    let mut rpr = String::new();
+    if bold || italic || color.is_some() {
+        rpr.push_str("<w:rPr>");
+        if bold {
+            rpr.push_str("<w:b/>");
+        }
+        if italic {
+            rpr.push_str("<w:i/>");
+        }
+        if let Some(c) = color {
+            rpr.push_str(&format!(r#"<w:color w:val="{}"/>"#, escaped(c)));
+        }
+        rpr.push_str("</w:rPr>");
+    }
+    format!(
+        r#"<w:r>{rpr}<w:t xml:space="preserve">{}</w:t></w:r>"#,
+        escaped(text)
     )
 }
 
@@ -885,6 +1005,7 @@ fn table(
     alt_rows: bool,
     first_col_bold: bool,
     borders: bool,
+    style_mode: bool,
 ) -> String {
     let mut out = String::new();
     out.push_str("<w:tbl>");
@@ -903,6 +1024,7 @@ fn table(
             Some(&brand.table_header_fill),
             Some("FFFFFF"),
             true,
+            style_mode,
         ));
     }
     out.push_str("</w:tr>");
@@ -920,6 +1042,7 @@ fn table(
                 fill,
                 Some(&brand.body_color),
                 first_col_bold && col_idx == 0,
+                style_mode,
             ));
         }
         out.push_str("</w:tr>");
@@ -928,7 +1051,12 @@ fn table(
     out
 }
 
-fn borderless_table(rows: &[Vec<String>], brand: &BrandSpec, label_col: usize) -> String {
+fn borderless_table(
+    rows: &[Vec<String>],
+    brand: &BrandSpec,
+    label_col: usize,
+    style_mode: bool,
+) -> String {
     let mut out = String::new();
     out.push_str(r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders></w:tblPr>"#);
     for row in rows {
@@ -940,6 +1068,7 @@ fn borderless_table(rows: &[Vec<String>], brand: &BrandSpec, label_col: usize) -
                 None,
                 Some(&brand.body_color),
                 idx == label_col,
+                style_mode,
             ));
         }
         out.push_str("</w:tr>");
@@ -954,13 +1083,27 @@ fn cell(
     fill: Option<&str>,
     color: Option<&str>,
     bold: bool,
+    style_mode: bool,
 ) -> String {
     let shading = fill
         .map(|fill| format!(r#"<w:shd w:fill="{}" w:val="clear"/>"#, escaped(fill)))
         .unwrap_or_default();
+    let inner = if style_mode {
+        // Header cell (with fill) — use the template's "Bodytextwhite" style so the cell
+        // text is white-on-fill without inline font/color overrides. Body cells fall back
+        // to "TableBody". Bold and italic still come through as plain run properties when
+        // requested.
+        let style = if fill.is_some() {
+            "Bodytextwhite"
+        } else {
+            "TableBody"
+        };
+        styled_paragraph(style, "", &plain_run(text, bold, false))
+    } else {
+        format!("<w:p>{}</w:p>", run(text, brand, "18", color, bold, false))
+    };
     format!(
-        r#"<w:tc><w:tcPr>{shading}<w:tcMar><w:top w:w="40" w:type="dxa"/><w:bottom w:w="40" w:type="dxa"/><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tcMar></w:tcPr><w:p>{}</w:p></w:tc>"#,
-        run(text, brand, "18", color, bold, false)
+        r#"<w:tc><w:tcPr>{shading}<w:tcMar><w:top w:w="40" w:type="dxa"/><w:bottom w:w="40" w:type="dxa"/><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tcMar></w:tcPr>{inner}</w:tc>"#
     )
 }
 
