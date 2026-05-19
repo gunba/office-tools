@@ -1,6 +1,5 @@
 use crate::ooxml::{
     PartMap, child, children, escaped, parse_xml, read_part, rewrite_parts, write_new_package,
-    write_xml,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand, ValueEnum};
@@ -389,11 +388,14 @@ fn direct_replace(args: &DocxReplaceArgs, replacements: &[Replacement]) -> Resul
         .collect::<Vec<_>>();
     let mut updates = PartMap::new();
     for part in candidate_parts {
-        let mut xml = parse_xml(&read_part(target, &part)?)?;
-        let mut touched = false;
-        replace_in_text_nodes(&mut xml, replacements, &mut counts, &mut touched);
+        let raw = read_part(target, &part)?;
+        let original = std::str::from_utf8(&raw)
+            .with_context(|| format!("part is not valid UTF-8: {part}"))?
+            .to_string();
+        let (rewritten, touched) =
+            replace_in_text_elements(&original, replacements, &mut counts);
         if touched {
-            updates.insert(part, write_xml(&xml)?);
+            updates.insert(part, rewritten.into_bytes());
         }
     }
     rewrite_parts(target, &updates, Vec::<String>::new())?;
@@ -424,28 +426,178 @@ fn load_replacements(args: &DocxReplaceArgs) -> Result<Vec<Replacement>> {
     bail!("provide --find/--replace, --replacements JSON, or --replacements-file");
 }
 
-fn replace_in_text_nodes(
-    element: &mut Element,
+/// Direct text-node replacement that operates on raw OOXML bytes.
+///
+/// Walks the source string and finds every `<w:t ...>...</w:t>` element,
+/// rewriting only the text content between the open and close tags. The
+/// surrounding XML — namespace declarations, attribute order, `xml:space`
+/// attributes, self-closing tags elsewhere, document declaration, and the
+/// rest of the bytes — is preserved verbatim.
+///
+/// This is the safe alternative to a full `xmltree` parse/serialize round-trip
+/// (which loses or rearranges OOXML quirks that Word relies on, producing
+/// "the file is corrupt; would you like to recover?" prompts in Word).
+fn replace_in_text_elements(
+    source: &str,
     replacements: &[Replacement],
     counts: &mut [ReplacementCount],
-    touched: &mut bool,
-) {
-    for child in &mut element.children {
-        match child {
-            XMLNode::Text(text) | XMLNode::CData(text) => {
-                for (idx, rep) in replacements.iter().enumerate() {
-                    let count = text.matches(&rep.find).count();
-                    if count > 0 {
-                        *text = text.replace(&rep.find, &rep.replace);
-                        counts[idx].count += count;
-                        *touched = true;
-                    }
-                }
+) -> (String, bool) {
+    let mut out = String::with_capacity(source.len());
+    let mut touched = false;
+    let mut cursor = 0;
+    let bytes = source.as_bytes();
+
+    while cursor < bytes.len() {
+        // Find next "<w:t" — must be at a tag boundary with the next char
+        // being whitespace, '>' or '/' so we don't match e.g. "<w:tbl".
+        let Some(rel_start) = source[cursor..].find("<w:t") else {
+            out.push_str(&source[cursor..]);
+            break;
+        };
+        let tag_start = cursor + rel_start;
+        let after_w_t = tag_start + 4;
+        if after_w_t >= bytes.len() {
+            out.push_str(&source[cursor..]);
+            break;
+        }
+        let boundary = bytes[after_w_t];
+        if !matches!(boundary, b' ' | b'\t' | b'\r' | b'\n' | b'>' | b'/') {
+            // Not actually a <w:t> — could be <w:tbl>, <w:tc>, <w:tr>, etc.
+            // Copy through the false-start and continue scanning.
+            out.push_str(&source[cursor..after_w_t]);
+            cursor = after_w_t;
+            continue;
+        }
+        // Find the matching '>' that closes the start tag.
+        let Some(open_end_rel) = source[after_w_t..].find('>') else {
+            out.push_str(&source[cursor..]);
+            break;
+        };
+        let open_end = after_w_t + open_end_rel;
+        let open_tag_end = open_end + 1;
+
+        // Self-closing `<w:t/>` — no content to replace.
+        if open_end > 0 && bytes[open_end - 1] == b'/' {
+            out.push_str(&source[cursor..open_tag_end]);
+            cursor = open_tag_end;
+            continue;
+        }
+        // Find the closing `</w:t>`.
+        let Some(close_rel) = source[open_tag_end..].find("</w:t>") else {
+            out.push_str(&source[cursor..]);
+            break;
+        };
+        let close_start = open_tag_end + close_rel;
+        let close_end = close_start + "</w:t>".len();
+
+        // Emit everything up to and including the open tag.
+        out.push_str(&source[cursor..open_tag_end]);
+
+        // Modify only the inner text. The inner text is XML-escaped; we
+        // operate on the decoded form so that find/replace strings match
+        // user intent (e.g. find "&" works even when stored as "&amp;").
+        let inner = &source[open_tag_end..close_start];
+        let decoded = xml_unescape(inner);
+        let mut new_decoded = decoded.clone();
+        let mut local_touched = false;
+        for (idx, rep) in replacements.iter().enumerate() {
+            let n = new_decoded.matches(&rep.find).count();
+            if n > 0 {
+                new_decoded = new_decoded.replace(&rep.find, &rep.replace);
+                counts[idx].count += n;
+                local_touched = true;
             }
-            XMLNode::Element(el) => replace_in_text_nodes(el, replacements, counts, touched),
-            _ => {}
+        }
+        if local_touched {
+            touched = true;
+            out.push_str(&xml_escape(&new_decoded));
+        } else {
+            out.push_str(inner);
+        }
+        out.push_str("</w:t>");
+        cursor = close_end;
+    }
+    (out, touched)
+}
+
+/// XML-escape characters that have special meaning in element text content.
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            other => out.push(other),
         }
     }
+    out
+}
+
+/// Reverse of `xml_escape` for the common entities Word produces in text nodes.
+fn xml_unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            if let Some(end) = s[i..].find(';') {
+                let entity = &s[i..i + end + 1];
+                match entity {
+                    "&amp;" => {
+                        out.push('&');
+                        i += entity.len();
+                        continue;
+                    }
+                    "&lt;" => {
+                        out.push('<');
+                        i += entity.len();
+                        continue;
+                    }
+                    "&gt;" => {
+                        out.push('>');
+                        i += entity.len();
+                        continue;
+                    }
+                    "&quot;" => {
+                        out.push('"');
+                        i += entity.len();
+                        continue;
+                    }
+                    "&apos;" => {
+                        out.push('\'');
+                        i += entity.len();
+                        continue;
+                    }
+                    other if other.starts_with("&#") => {
+                        let body = &other[2..other.len() - 1];
+                        let code = if let Some(hex) = body.strip_prefix('x').or_else(|| body.strip_prefix('X')) {
+                            u32::from_str_radix(hex, 16).ok()
+                        } else {
+                            body.parse::<u32>().ok()
+                        };
+                        if let Some(c) = code.and_then(char::from_u32) {
+                            out.push(c);
+                            i += entity.len();
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // Default: copy this byte through. Safe because `&` not followed by a
+        // recognized entity is left intact, and all other bytes are valid UTF-8
+        // boundaries inside a `&str`.
+        let ch_len = source_char_len(&s[i..]);
+        out.push_str(&s[i..i + ch_len]);
+        i += ch_len;
+    }
+    out
+}
+
+fn source_char_len(s: &str) -> usize {
+    s.chars().next().map(|c| c.len_utf8()).unwrap_or(1)
 }
 
 pub fn compose_from_file(spec_path: &Path, output: &Path) -> Result<()> {
@@ -1560,6 +1712,127 @@ mod tests {
             footer.contains("TEMPLATE FOOTER"),
             "template footer should be preserved: {footer}"
         );
+        Ok(())
+    }
+
+    /// Regression: a `direct_replace` round-trip must preserve every byte of
+    /// the document.xml that doesn't intersect a replaced text node. The
+    /// previous implementation parsed the part via `xmltree` and re-serialized
+    /// it, which lost or rearranged namespace declarations, `xml:space`
+    /// attributes, and self-closing-tag style — producing files that Word
+    /// would only open via the "Recover" prompt and then render with broken
+    /// formatting. The new byte-level implementation rewrites only the inner
+    /// text of `<w:t>...</w:t>` elements.
+    #[test]
+    fn direct_replace_preserves_complex_ooxml_byte_for_byte() -> Result<()> {
+        use crate::ooxml::{list_parts, read_part_to_string, write_new_package};
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("complex.docx");
+
+        // Hand-rolled document.xml that exercises the quirks the xmltree
+        // round-trip used to mangle: multiple namespace declarations on the
+        // root, mc:AlternateContent (Word 2010+ fallback wrapper), xml:space
+        // = "preserve" on whitespace-bearing text nodes, and a self-closing
+        // `<w:tab/>`.
+        let document = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" mc:Ignorable="w14 w15 wp14"><w:body><w:p><w:r><w:t xml:space="preserve">Hello </w:t></w:r><w:r><w:t>SENTINEL</w:t></w:r><w:r><w:t xml:space="preserve"> world.</w:t></w:r></w:p><w:p><w:r><w:tab/><w:t>Tabbed</w:t></w:r></w:p><mc:AlternateContent><mc:Choice Requires="wp14"><w:p><w:r><w:t>SENTINEL alt</w:t></w:r></w:p></mc:Choice><mc:Fallback><w:p><w:r><w:t>plain alt</w:t></w:r></w:p></mc:Fallback></mc:AlternateContent></w:body></w:document>"#.to_vec();
+
+        let mut parts = PartMap::new();
+        parts.insert(
+            "[Content_Types].xml".to_string(),
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#.to_vec(),
+        );
+        parts.insert(
+            "_rels/.rels".to_string(),
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#.to_vec(),
+        );
+        parts.insert("word/document.xml".to_string(), document.clone());
+        write_new_package(&path, &parts)?;
+
+        let before = read_part_to_string(&path, "word/document.xml")?;
+        // Run the replacement via the same entry point the MCP tool uses.
+        let result = replace(&DocxReplaceArgs {
+            file: path.clone(),
+            output: None,
+            find: Some("SENTINEL".to_string()),
+            replace: Some("REPLACED".to_string()),
+            replacements: None,
+            replacements_file: None,
+            engine: DocxReplaceEngine::Direct,
+        })?;
+        assert_eq!(result.counts.len(), 1);
+        assert_eq!(result.counts[0].count, 2);
+
+        let after = read_part_to_string(&path, "word/document.xml")?;
+        // The only differences must be the two SENTINEL -> REPLACED swaps
+        // inside <w:t> elements. Confirm by reverse-substituting and checking
+        // byte equality with the original.
+        let restored = after.replace("REPLACED", "SENTINEL");
+        assert_eq!(
+            restored, before,
+            "direct_replace must not change any bytes outside the targeted <w:t> text"
+        );
+
+        // Sanity-check the structural quirks still survive verbatim.
+        assert!(after.contains(r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006""#));
+        assert!(after.contains(r#"xml:space="preserve""#));
+        assert!(after.contains("<w:tab/>"));
+        assert!(after.contains("<mc:AlternateContent>"));
+        assert!(after.contains(r#"mc:Ignorable="w14 w15 wp14""#));
+
+        // The package still contains exactly the parts we wrote.
+        let parts_now: Vec<_> = list_parts(&path)?
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert!(parts_now.contains(&"word/document.xml".to_string()));
+        assert!(parts_now.contains(&"[Content_Types].xml".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn direct_replace_xml_escapes_replacement_text() -> Result<()> {
+        use crate::ooxml::{read_part_to_string, write_new_package};
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("escape.docx");
+
+        let document = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>OLD</w:t></w:r></w:p></w:body></w:document>"#.to_vec();
+
+        let mut parts = PartMap::new();
+        parts.insert(
+            "[Content_Types].xml".to_string(),
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#.to_vec(),
+        );
+        parts.insert(
+            "_rels/.rels".to_string(),
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#.to_vec(),
+        );
+        parts.insert("word/document.xml".to_string(), document);
+        write_new_package(&path, &parts)?;
+
+        // Replacement that contains XML metacharacters must be escaped on
+        // write so the resulting document.xml stays well-formed.
+        replace(&DocxReplaceArgs {
+            file: path.clone(),
+            output: None,
+            find: Some("OLD".to_string()),
+            replace: Some("A & B < C > D".to_string()),
+            replacements: None,
+            replacements_file: None,
+            engine: DocxReplaceEngine::Direct,
+        })?;
+
+        let xml = read_part_to_string(&path, "word/document.xml")?;
+        assert!(xml.contains("A &amp; B &lt; C &gt; D"));
+        // Round-trip through the parser must still succeed.
+        let _ = parse_xml(xml.as_bytes())?;
         Ok(())
     }
 }
