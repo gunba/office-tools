@@ -10,3 +10,6 @@ target/
 
 # Plugin binary copied by install.bat
 plugins/office-tools/bin/office-tools*
+
+# Local instructions (not committed)
+CLAUDE.md
