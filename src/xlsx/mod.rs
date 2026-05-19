@@ -2003,7 +2003,15 @@ fn direct_edit_workbook(
         updates.insert(part, write_xml(&worksheet)?);
     }
 
-    let removed_calc_chain_parts = if formula_written {
+    // Always invalidate the calc chain on any cell edit, not just formula
+    // writes. Excel caches downstream formula results in calcChain.xml; if a
+    // value-only edit changes a cell that a formula references, the cached
+    // result is stale on next open. Dropping calcChain.xml + setting
+    // `fullCalcOnLoad="1"` forces Excel to recompute everything (the rebuild
+    // takes milliseconds). Without this, badge cells / conditional-format
+    // result cells / dashboard summaries silently show pre-edit values.
+    let mut content_types_updated = false;
+    let removed_calc_chain_parts = if !grouped.is_empty() {
         set_workbook_recalc_flags(&mut package.workbook);
         let removed = remove_calc_chain_relationships(&mut package.rels);
         if !removed.is_empty() {
@@ -2013,12 +2021,14 @@ fn direct_edit_workbook(
             }
             updates.insert(CONTENT_TYPES.to_string(), write_xml(&content_types)?);
             updates.insert(WORKBOOK_RELS.to_string(), write_xml(&package.rels)?);
+            content_types_updated = true;
         }
         updates.insert(WORKBOOK.to_string(), write_xml(&package.workbook)?);
         removed
     } else {
         Vec::new()
     };
+    let _ = content_types_updated;
 
     rewrite_parts(path, &updates, removed_calc_chain_parts)?;
     Ok(EditResult {
@@ -3126,6 +3136,46 @@ mod tests {
         assert!(workbook.contains("fullCalcOnLoad"));
         let rels = read_part_to_string(&path, "xl/_rels/workbook.xml.rels")?;
         assert!(!rels.contains("calcChain"));
+        let parts = list_parts(&path)?;
+        assert!(!parts.iter().any(|part| part.name == "xl/calcChain.xml"));
+        Ok(())
+    }
+
+    /// Regression: value-only edits must also clear the calc chain so that
+    /// downstream formula caches don't show pre-edit results when the
+    /// workbook is next opened. Previously, `xlsx_edit` only cleared the
+    /// calc chain when a formula was written, which left dashboards and
+    /// computed badge cells silently stale after value-only changes.
+    #[test]
+    fn value_edit_also_clears_calc_chain() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("book.xlsx");
+        write_new_package(&path, &minimal_xlsx_parts())?;
+
+        edit(&EditArgs {
+            file: path.clone(),
+            sheet: Some("Sheet1".to_string()),
+            cell: Some("A1".to_string()),
+            range: None,
+            value: Some("changed".to_string()),
+            clear: false,
+            edits: None,
+            edits_file: None,
+            value_type: None,
+            allow_protected: false,
+            json: true,
+        })?;
+
+        let workbook = read_part_to_string(&path, "xl/workbook.xml")?;
+        assert!(
+            workbook.contains("fullCalcOnLoad"),
+            "value edit should also set fullCalcOnLoad so cached formula values recompute on next open"
+        );
+        let rels = read_part_to_string(&path, "xl/_rels/workbook.xml.rels")?;
+        assert!(
+            !rels.contains("calcChain"),
+            "calcChain relationship must be removed after any cell edit, not only formula edits"
+        );
         let parts = list_parts(&path)?;
         assert!(!parts.iter().any(|part| part.name == "xl/calcChain.xml"));
         Ok(())
