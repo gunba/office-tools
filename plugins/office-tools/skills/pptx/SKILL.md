@@ -38,7 +38,7 @@ Supported layouts include:
 - `table`
 - `image_placeholder`
 
-The builder intentionally does not ship any private or firm-specific brand data.
+The builder intentionally does not ship any private or caller-specific brand data.
 Slide `notes` fields are written into notes-slide parts, and
 `image_placeholder.image_prompt` is copied there for follow-up image generation.
 For advanced edits, use the MCP/package primitives to inspect or replace exact

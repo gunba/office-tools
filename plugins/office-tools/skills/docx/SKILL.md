@@ -53,5 +53,5 @@ The JSON composer supports generic equivalents of the reference workflow:
 - `spacer`
 - `page_break`
 
-Brand values such as fonts and colors are provided in the spec. No firm-specific
+Brand values such as fonts and colors are provided in the spec. No caller-specific
 branding data is shipped in the repository.
