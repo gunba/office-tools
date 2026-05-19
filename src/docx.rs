@@ -188,11 +188,15 @@ pub enum DocxBlock {
         alt_row_shading: bool,
         #[serde(default)]
         first_col_bold: bool,
+        #[serde(default)]
+        col_widths_twips: Option<Vec<usize>>,
     },
     BorderlessTable {
         rows: Vec<Vec<String>>,
         #[serde(default)]
         label_col: usize,
+        #[serde(default)]
+        col_widths_twips: Option<Vec<usize>>,
     },
     Divider,
     Spacer {
@@ -810,6 +814,7 @@ fn render_block(
             rows,
             alt_row_shading,
             first_col_bold,
+            col_widths_twips,
         } => body.push_str(&table(
             headers,
             rows,
@@ -818,9 +823,20 @@ fn render_block(
             *first_col_bold,
             true,
             style_mode,
+            col_widths_twips.as_deref(),
         )),
-        DocxBlock::BorderlessTable { rows, label_col } => {
-            body.push_str(&borderless_table(rows, brand, *label_col, style_mode));
+        DocxBlock::BorderlessTable {
+            rows,
+            label_col,
+            col_widths_twips,
+        } => {
+            body.push_str(&borderless_table(
+                rows,
+                brand,
+                *label_col,
+                style_mode,
+                col_widths_twips.as_deref(),
+            ));
         }
         DocxBlock::Divider => body.push_str(&divider_p(&brand.accent_color)),
         DocxBlock::Spacer { height_twips } => body.push_str(&spacer_p(*height_twips)),
@@ -998,6 +1014,7 @@ fn footnotes_xml(footnotes: &[String], brand: &BrandSpec) -> String {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn table(
     headers: &[String],
     rows: &[Vec<String>],
@@ -1006,6 +1023,7 @@ fn table(
     first_col_bold: bool,
     borders: bool,
     style_mode: bool,
+    col_widths: Option<&[usize]>,
 ) -> String {
     let mut out = String::new();
     out.push_str("<w:tbl>");
@@ -1016,8 +1034,9 @@ fn table(
         out.push_str(r#"<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>"#);
     }
     out.push_str("</w:tblPr>");
+    out.push_str(&tbl_grid(col_widths, headers.len()));
     out.push_str("<w:tr>");
-    for header in headers {
+    for (col_idx, header) in headers.iter().enumerate() {
         out.push_str(&cell(
             header,
             brand,
@@ -1025,6 +1044,7 @@ fn table(
             Some("FFFFFF"),
             true,
             style_mode,
+            col_width_at(col_widths, col_idx),
         ));
     }
     out.push_str("</w:tr>");
@@ -1043,6 +1063,7 @@ fn table(
                 Some(&brand.body_color),
                 first_col_bold && col_idx == 0,
                 style_mode,
+                col_width_at(col_widths, col_idx),
             ));
         }
         out.push_str("</w:tr>");
@@ -1056,9 +1077,12 @@ fn borderless_table(
     brand: &BrandSpec,
     label_col: usize,
     style_mode: bool,
+    col_widths: Option<&[usize]>,
 ) -> String {
     let mut out = String::new();
     out.push_str(r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders></w:tblPr>"#);
+    let row_width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    out.push_str(&tbl_grid(col_widths, row_width));
     for row in rows {
         out.push_str("<w:tr>");
         for (idx, value) in row.iter().enumerate() {
@@ -1069,6 +1093,7 @@ fn borderless_table(
                 Some(&brand.body_color),
                 idx == label_col,
                 style_mode,
+                col_width_at(col_widths, idx),
             ));
         }
         out.push_str("</w:tr>");
@@ -1077,6 +1102,28 @@ fn borderless_table(
     out
 }
 
+fn tbl_grid(col_widths: Option<&[usize]>, expected_cols: usize) -> String {
+    let widths = col_widths.unwrap_or(&[]);
+    if widths.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("<w:tblGrid>");
+    for w in widths {
+        out.push_str(&format!(r#"<w:gridCol w:w="{w}"/>"#));
+    }
+    // Pad with auto-width columns if the spec under-specified.
+    for _ in widths.len()..expected_cols {
+        out.push_str(r#"<w:gridCol w:w="0"/>"#);
+    }
+    out.push_str("</w:tblGrid>");
+    out
+}
+
+fn col_width_at(col_widths: Option<&[usize]>, idx: usize) -> Option<usize> {
+    col_widths.and_then(|w| w.get(idx).copied())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cell(
     text: &str,
     brand: &BrandSpec,
@@ -1084,9 +1131,13 @@ fn cell(
     color: Option<&str>,
     bold: bool,
     style_mode: bool,
+    width_twips: Option<usize>,
 ) -> String {
     let shading = fill
         .map(|fill| format!(r#"<w:shd w:fill="{}" w:val="clear"/>"#, escaped(fill)))
+        .unwrap_or_default();
+    let width = width_twips
+        .map(|w| format!(r#"<w:tcW w:w="{w}" w:type="dxa"/>"#))
         .unwrap_or_default();
     let inner = if style_mode {
         // Header cell (with fill) — use the template's "Bodytextwhite" style so the cell
@@ -1103,7 +1154,7 @@ fn cell(
         format!("<w:p>{}</w:p>", run(text, brand, "18", color, bold, false))
     };
     format!(
-        r#"<w:tc><w:tcPr>{shading}<w:tcMar><w:top w:w="40" w:type="dxa"/><w:bottom w:w="40" w:type="dxa"/><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tcMar></w:tcPr>{inner}</w:tc>"#
+        r#"<w:tc><w:tcPr>{width}{shading}<w:tcMar><w:top w:w="40" w:type="dxa"/><w:bottom w:w="40" w:type="dxa"/><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tcMar></w:tcPr>{inner}</w:tc>"#
     )
 }
 
@@ -1348,6 +1399,7 @@ mod tests {
                     rows: vec![vec!["1".to_string(), "2".to_string()]],
                     alt_row_shading: true,
                     first_col_bold: false,
+                    col_widths_twips: None,
                 },
             ],
             template: None,
