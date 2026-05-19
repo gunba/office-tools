@@ -530,7 +530,8 @@ fn docx_compose_input_schema() -> Value {
                                 "level": { "type": "integer" },
                                 "segments": { "type": "array" },
                                 "headers": { "type": "array", "items": { "type": "string" } },
-                                "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } }
+                                "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
+                                "col_widths_twips": { "type": "array", "items": { "type": "integer" }, "description": "For table/borderless_table: explicit column widths in twips. 1440 twips = 1 inch. Omitted columns auto-size." }
                             },
                             "required": ["type"]
                         }
